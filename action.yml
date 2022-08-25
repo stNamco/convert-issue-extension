@@ -1,0 +1,21 @@
+name: 'github-title-helper'
+description: 'Githubのタイトル(文字列)を解釈して良きように処理を実行するアクション'
+inputs:
+  githubToken:
+    description: 'github personal access token. repo and project permission'
+    required: true
+  issueId:
+    description: 'issue id or pr id'
+    required: true
+  projectNumber:
+    description: 'target project number.'
+    required: true
+  issueTitle:
+    description: 'issue title which is parsed for updating'
+    required: true
+outputs:
+  itemId:
+    description: 'card node id'
+runs:
+  using: 'node16'
+  main: 'dist/index.js'
