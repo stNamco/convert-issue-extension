@@ -1,4 +1,4 @@
-name: 'github-issue-title-parser'
+name: 'issue-title-parser'
 description: 'Githubのタイトル(文字列)を解釈して良きように処理を実行するアクション'
 inputs:
   githubToken:
