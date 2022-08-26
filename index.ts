@@ -40,99 +40,161 @@ interface ProjectCardField {
   valueToken: GithubFieldValueToken
 }
 
-interface ProjectV2CardInfo {
-  projectNodeId: string;
-  nodeId: string;
-  fields: ProjectV2Field[];
-}
-
 interface ProjectV2Field {
   nodeId: string;
   name: string;
 }
 
-async function getProjectCardInfo(issueNodeId: string, projectNumber: number): Promise<ProjectV2CardInfo | undefined> {  
-  const res: any = await octokit.graphql(
-    `
-    query getCardInfo($issueNodeId: ID!, $projectNumber: Int!) {
-      node(id: $issueNodeId) {
-       ... on Issue {
-        id
-        number
-        title
-            projectV2(number: $projectNumber) {
+interface ProjectV2ItemNodeContent {
+  nodeId: string;
+}
+
+interface ProjectV2ItemEdge {
+  nodeId: string;
+  content: ProjectV2ItemNodeContent;
+  cursor: string;
+}
+
+interface ProjectV2CardInfo {
+  projectNodeId: string;
+  item: ProjectV2ItemEdge
+}
+
+async function getProjectCardInfo(issueNodeId: string, projectNumber: number): Promise<ProjectV2CardInfo | undefined> {
+  let projectV2: any;
+  let itemPageLimit: number = 1; // MEMO: 1pageはあるものとする。
+
+  async function fetchCardInfo(issueNodeId: string, projectNumber: number, cursor?: string): Promise<ProjectV2ItemEdge[]> {
+    // TODO: cardのデータどうとるのがいいかは今後検討。まずは動くものを作る。
+    const res: any = await octokit.graphql(
+      `
+      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $cursor: String) {
+        node(id: $issueNodeId) {
+        ... on Issue {
           id
+          number
           title
-          items(first: 1) {
-            edges {
-              node {
-                id
-                content {
-                  ... on Issue {
-                    id
-                    title
-                  }
-                }
-                fieldValues(first: 10) {
-                  nodes {
-                    ... on ProjectV2ItemFieldNumberValue {
-                      field {
-                        ... on ProjectV2Field {
-                          id
-                          name
-                        }
-                      }
+          projectV2(number: $projectNumber) {
+            id
+            title
+            items(first: 100, after: $cursor) {
+              totalCount
+              edges {
+                cursor
+                node {
+                  id
+                  content {
+                    ... on Issue {
+                      id
+                      title
                     }
                   }
                 }
               }
             }
           }
-        }
+          }
         }
       }
-    }
-    `,
-    {
-      issueNodeId,
-      projectNumber
-    }
-  )
+      `,
+      {
+        issueNodeId,
+        projectNumber,
+        cursor
+      }
+    );
 
-  const projectV2 = res.node.projectV2;
-  // NOTE: project number指定しているのでprojectは1つしか返ってこないはず。
-  const projectV2Card = projectV2.items.edges[0].node;
-  const fields = projectV2Card.fieldValues.nodes.reduce((acc: ProjectV2Field[], v: any): ProjectV2Field[] => {
-    if (!!Object.keys(v).length) {
-      const f: ProjectV2Field = {
-        nodeId: v.field.id,
-        name: v.field.name
-      };
-      acc.push(f);
-    }
-    return acc;
-  }, []);
+    projectV2 = res.node.projectV2;
+    itemPageLimit = Math.ceil(res.node.projectV2.items.totalCount / 100);
+
+    const projectV2ItemEdges = res.node.projectV2.items.edges.reduce((acc: ProjectV2ItemEdge[], v: any): ProjectV2ItemEdge[] => {
+      acc.push({
+        nodeId: v.node.id,
+        content: {
+          nodeId: v.node.content.id
+        },
+        cursor: v.cursor,
+      })
+      return acc;
+    }, []);
+
+    return projectV2ItemEdges;
+  }
+
+  let edges = await fetchCardInfo(issueNodeId, projectNumber, undefined);
+  let item: ProjectV2ItemEdge | undefined;
+  let itemPage = 0;
+  while (item === undefined && itemPage <= itemPageLimit) {
+    const _item = edges.find((ele: ProjectV2ItemEdge) => ele.content.nodeId === issueNodeId) as ProjectV2ItemEdge;
+    edges = await fetchCardInfo(issueNodeId, projectNumber, edges.pop()?.cursor);
+    item = _item;
+    itemPage += 1;
+  }
+
+  if (item === undefined) {
+    core.setFailed('カードがありません');
+  }
 
   const card: ProjectV2CardInfo = {
     projectNodeId: projectV2.id,
-    nodeId: projectV2Card.id,
-    fields: fields,
+    item: item!
   };
   return card;
 }
 
-function createProjectCardFields(card: ProjectV2CardInfo, fieldValueTokens: GithubFieldValueToken[]): ProjectCardField[] {
-  return fieldValueTokens.reduce((acc: ProjectCardField[], v: GithubFieldValueToken): ProjectCardField[] => {
-    const detectedFieldNode = card.fields.find(ele => ele.name === v.fieldName);
-    if (detectedFieldNode !== undefined) {
-      const f: ProjectCardField = {
-        nodeId: detectedFieldNode.nodeId,
-        valueToken: v
-      };
-      acc.push(f);
-    }
+async function createProjectCardFields(issueNodeId: string, projectNumber: number, fieldValueTokens: GithubFieldValueToken[]): Promise<ProjectCardField[]> {
+
+  async function fetchField(issueNodeId: string, projectNumber: number, fieldName: string): Promise<any> {
+    // TODO: fieldのデータどうとるのがいいかは今後検討。まずは動くものを作る。
+    return await octokit.graphql(
+      `
+      query fetchField($issueNodeId: ID!, $projectNumber: Int!, $fieldName: String!) {
+        node(id: $issueNodeId) {
+            ... on Issue {
+              id
+              title
+              projectV2(number: $projectNumber) {
+                title
+                id
+                field(name: $fieldName) {
+                  ... on ProjectV2Field {
+                    id
+                    name
+                  }
+                }
+              }
+            }
+          }
+      }
+      `,
+      {
+        issueNodeId,
+        projectNumber,
+        fieldName
+      }
+    );
+  }
+
+  let tmpDict: {[key: string]: GithubFieldValueToken} = {};
+  const tasks = fieldValueTokens.reduce((acc: Promise<any>[], v: GithubFieldValueToken): Promise<any>[] => {
+    console.log(v);
+    tmpDict[v.fieldName] = v;
+    acc.push(fetchField(issueNodeId, projectNumber, v.fieldName));
     return acc;
   }, []);
+
+  let output: ProjectCardField[] = [];
+  await Promise.all(tasks)
+    .then((res) => {    
+      output = res.reduce((acc: ProjectCardField[], v: any): ProjectCardField[] => {
+        if (v.node.projectV2.field !== undefined) {
+          acc.push({nodeId: v.node.projectV2.field.id, valueToken: tmpDict[v.node.projectV2.field.name]});
+        }
+        return acc;
+      }, []);
+  });
+
+  return output;
 }
 
 async function updateCustomField(cardField: ProjectCardField, projectId: string, cardNodeId: string): Promise<void> {
@@ -177,16 +239,14 @@ async function main() {
     core.setFailed('更新する情報がありません');
   }
 
-
   // step2: ProjectV2の情報を取得
   const card = await getProjectCardInfo(issueId, projectNumber);
   const projectId = card!.projectNodeId;
-  const cardNodeId = card!.nodeId;
-
+  const cardNodeId = card!.item.nodeId;
 
   // step3: 更新情報を生成
   // NOTE: 現状fieldの更新しか実装してないので下記のような実装をしている。
-  const projectCardFields = createProjectCardFields(card!, tokens as GithubFieldValueToken[]);
+  const projectCardFields = await createProjectCardFields(issueId, projectNumber, tokens as GithubFieldValueToken[]);
 
   // step4: 情報を更新
   const tasks = projectCardFields.reduce((acc: Promise<void>[], f: ProjectCardField): Promise<void>[] => {
@@ -194,14 +254,14 @@ async function main() {
     return acc;
   }, []);
 
-  Promise.all(tasks)
+  await Promise.all(tasks)
     .then((res) => {
       console.log('done');
   });
 
 
   // exit
-  core.setOutput('cardNodeId', card!.nodeId);
+  core.setOutput('cardNodeId', card!.item.nodeId);
 }
 
 const ghToken = core.getInput('githubToken', {required: true});
