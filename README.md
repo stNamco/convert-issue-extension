@@ -1,1 +1,1 @@
-# github-issue-title-parser
+# convert-issue-extension
