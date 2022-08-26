@@ -1,5 +1,5 @@
-name: 'issue-title-parser'
-description: 'Githubのタイトル(文字列)を解釈して良きように処理を実行するアクション'
+name: 'convert-issue-extension'
+description: 'extend convert-issue for adding information.'
 inputs:
   githubToken:
     description: 'github personal access token. repo and project permission'
