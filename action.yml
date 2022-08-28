@@ -13,6 +13,14 @@ inputs:
   issueTitle:
     description: 'issue title which is parsed for updating'
     required: true
+  shouldSyncWithTrackedInIssue:
+    description: 'if you need to sync the issue with tracked-in-issue, you need to change true'
+    required: false
+    default: "false"
+  shouldAddProjectIfNeeded:
+    description: 'if you need to add the issue to the project, you need to change true'
+    required: false
+    default: "true"
 outputs:
   itemId:
     description: 'card node id'

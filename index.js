@@ -34,73 +34,142 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 const core = __importStar(require("@actions/core"));
 const github = __importStar(require("@actions/github"));
-const TokenKind = {
-    LABEL: 1,
-    CARD_FIELD: 2,
+const AppConstant = {
+    TRACKED_IN_ISSUE_TITLE_FILED_NAME: "tracked in issue title",
 };
 class GithubFieldValueToken {
-    constructor(kind, name, val) {
-        this.kind = kind;
+    constructor(name, val) {
         this.fieldName = name;
         this.val = val;
     }
     ;
 }
+class GithubLabelValueToken {
+    constructor(name) {
+        this.labelName = name;
+    }
+    ;
+}
 // Labelのtokenizeも検討しているが後回し。むしろいらないかも。
 function tokenize(input) {
-    const result = input.match(/\(.+?:.+?\)/giu);
-    const tokens = [];
-    // MEMO: 現状fieldのみ実装
-    for (var v of result !== null && result !== void 0 ? result : []) {
-        let d = v.slice(1).slice(0, -1).split(':');
-        tokens.push(new GithubFieldValueToken(TokenKind.CARD_FIELD, d[0], d[1]));
+    function tokenizeField(input) {
+        const tokens = [];
+        const result = input.match(/\(.+?:.+?\)/giu);
+        for (var v of result !== null && result !== void 0 ? result : []) {
+            let d = v.slice(1).slice(0, -1).split(':');
+            tokens.push(new GithubFieldValueToken(d[0], d[1]));
+        }
+        return tokens;
     }
-    return tokens;
+    function tokenizeLabel(input) {
+        const tokens = [];
+        const result = input.match(/\[.+?\]/giu);
+        for (var v of result !== null && result !== void 0 ? result : []) {
+            tokens.push(new GithubLabelValueToken(v.slice(1).slice(0, -1)));
+        }
+        return tokens;
+    }
+    return {
+        fieldTokens: tokenizeField(input),
+        labelTokens: tokenizeLabel(input)
+    };
 }
-function getProjectCardInfo(issueNodeId, projectNumber) {
+const ProjectV2FieldDataType = {
+    TEXT: 'TEXT',
+    NUMBER: 'NUMBER'
+};
+function addIssueToProject(projectNumber, contentId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        function getProjectInfo(projectNumber) {
+            return __awaiter(this, void 0, void 0, function* () {
+                const repositoryOwnerName = github.context.payload.repository.owner.login;
+                const ownerType = github.context.payload.repository.owner.type.toLowerCase();
+                const res = yield octokit.graphql(`query getProject($repositoryOwnerName: String!, $projectNumber: Int!) {
+        ${ownerType}(login: $repositoryOwnerName) {
+          projectV2(number: $projectNumber) {
+            id
+          }
+        }
+      }`, {
+                    repositoryOwnerName,
+                    projectNumber
+                });
+                return res[ownerType].projectV2.id;
+            });
+        }
+        const projectId = yield getProjectInfo(projectNumber);
+        const res = yield octokit.graphql(`mutation addIssueToProject($input: AddProjectV2ItemByIdInput!) {
+      addProjectV2ItemById(input: $input) {
+        item {
+          id
+        }
+      }
+    }`, {
+            input: {
+                projectId,
+                contentId
+            }
+        });
+        return projectId;
+    });
+}
+function getProjectCardInfo(issueNodeId, projectNumber, shouldSyncWithTrackedInIssue) {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
-        let projectV2;
-        let itemPageLimit = 1; // MEMO: 1pageはあるものとする。
-        function fetchCardInfo(issueNodeId, projectNumber, cursor) {
+        function fetchCardInfo(issueNodeId, projectNumber, cursor, withTrackedInIssue = false) {
+            var _a, _b, _c, _d;
             return __awaiter(this, void 0, void 0, function* () {
                 // TODO: cardのデータどうとるのがいいかは今後検討。まずは動くものを作る。
                 const res = yield octokit.graphql(`
-      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $cursor: String) {
+      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $withTrackedInIssue: Boolean!, $cursor: String) {
         node(id: $issueNodeId) {
         ... on Issue {
-          id
-          number
-          title
-          projectV2(number: $projectNumber) {
             id
+            number
             title
-            items(first: 100, after: $cursor) {
-              totalCount
-              edges {
-                cursor
-                node {
-                  id
-                  content {
-                    ... on Issue {
-                      id
-                      title
+            projectV2(number: $projectNumber) {
+              id
+              title
+              items(first: 100, after: $cursor) {
+                totalCount
+                edges {
+                  cursor
+                  node {
+                    id
+                    content {
+                      ... on Issue {
+                        id
+                        title
+                      }
                     }
                   }
                 }
               }
             }
-          }
+            trackedInIssues(first: 10) @include(if: $withTrackedInIssue) {
+              edges {
+                node {
+                  title
+                  number
+                  milestone {
+                    id
+                    number
+                  }
+                }
+              }
+            }
           }
         }
       }
       `, {
                     issueNodeId,
                     projectNumber,
+                    withTrackedInIssue,
                     cursor
                 });
-                projectV2 = res.node.projectV2;
-                itemPageLimit = Math.ceil(res.node.projectV2.items.totalCount / 100);
+                if (!res.node.projectV2) {
+                    return undefined;
+                }
                 const projectV2ItemEdges = res.node.projectV2.items.edges.reduce((acc, v) => {
                     acc.push({
                         nodeId: v.node.id,
@@ -111,24 +180,53 @@ function getProjectCardInfo(issueNodeId, projectNumber) {
                     });
                     return acc;
                 }, []);
-                return projectV2ItemEdges;
+                let trackedInIssue;
+                if (withTrackedInIssue && ((_b = (_a = res === null || res === void 0 ? void 0 : res.node) === null || _a === void 0 ? void 0 : _a.trackedInIssues) === null || _b === void 0 ? void 0 : _b.edges.length) > 0 && !trackedInIssue) {
+                    // NOTE: 一旦TrackedInIssuesは1つとして実装する。
+                    const edge = (_d = (_c = res === null || res === void 0 ? void 0 : res.node) === null || _c === void 0 ? void 0 : _c.trackedInIssues) === null || _d === void 0 ? void 0 : _d.edges[0];
+                    trackedInIssue = {
+                        title: edge.node.title,
+                        issueNumber: edge.node.number,
+                        milestoneNumber: edge.node.milestone ? edge.node.milestone.number : undefined,
+                    };
+                }
+                return {
+                    items: projectV2ItemEdges,
+                    projectV2NodeId: res.node.projectV2.id,
+                    itemPageLimit: Math.ceil(res.node.projectV2.items.totalCount / 100),
+                    trackedInIssue: trackedInIssue
+                };
             });
         }
-        let edges = yield fetchCardInfo(issueNodeId, projectNumber, undefined);
-        let item;
+        let info = yield fetchCardInfo(issueNodeId, projectNumber, undefined, shouldSyncWithTrackedInIssue);
+        let projectV2NodeId;
+        if (info === undefined) {
+            if (shouldAddProjectIfNeeded) {
+                projectV2NodeId = yield addIssueToProject(projectNumber, issueNodeId);
+                info = yield fetchCardInfo(issueNodeId, projectNumber, undefined, shouldSyncWithTrackedInIssue);
+            }
+            else {
+                core.setFailed("there is no project which is related to this issue");
+            }
+        }
+        else {
+            projectV2NodeId = info.projectV2NodeId;
+        }
+        let item = info.items.find((ele) => ele.content.nodeId === issueNodeId);
         let itemPage = 0;
-        while (item === undefined && itemPage <= itemPageLimit) {
-            const _item = edges.find((ele) => ele.content.nodeId === issueNodeId);
-            edges = yield fetchCardInfo(issueNodeId, projectNumber, (_a = edges.pop()) === null || _a === void 0 ? void 0 : _a.cursor);
+        while (item === undefined && itemPage <= info.itemPageLimit) {
+            const _item = info.items.find((ele) => ele.content.nodeId === issueNodeId);
+            info = yield fetchCardInfo(issueNodeId, projectNumber, (_a = info.items.pop()) === null || _a === void 0 ? void 0 : _a.cursor);
             item = _item;
             itemPage += 1;
         }
         if (item === undefined) {
-            core.setFailed('カードがありません');
+            core.setFailed('there is no card which is related to this issue');
         }
         const card = {
-            projectNodeId: projectV2.id,
-            item: item
+            projectNodeId: projectV2NodeId,
+            item: item,
+            trackedInIssue: info.trackedInIssue
         };
         return card;
     });
@@ -151,6 +249,7 @@ function createProjectCardFields(issueNodeId, projectNumber, fieldValueTokens) {
                   ... on ProjectV2Field {
                     id
                     name
+                    dataType
                   }
                 }
               }
@@ -166,7 +265,6 @@ function createProjectCardFields(issueNodeId, projectNumber, fieldValueTokens) {
         }
         let tmpDict = {};
         const tasks = fieldValueTokens.reduce((acc, v) => {
-            console.log(v);
             tmpDict[v.fieldName] = v;
             acc.push(fetchField(issueNodeId, projectNumber, v.fieldName));
             return acc;
@@ -176,7 +274,8 @@ function createProjectCardFields(issueNodeId, projectNumber, fieldValueTokens) {
             .then((res) => {
             output = res.reduce((acc, v) => {
                 if (v.node.projectV2.field !== undefined) {
-                    acc.push({ nodeId: v.node.projectV2.field.id, valueToken: tmpDict[v.node.projectV2.field.name] });
+                    const f = v.node.projectV2.field;
+                    acc.push({ nodeId: f.id, valueToken: tmpDict[f.name], type: f.dataType });
                 }
                 return acc;
             }, []);
@@ -184,20 +283,24 @@ function createProjectCardFields(issueNodeId, projectNumber, fieldValueTokens) {
         return output;
     });
 }
+// https://docs.github.com/ja/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects#updating-a-custom-text-number-or-date-field
+// NOTE: supported field data type are STRING and NUMBER for now.
 function updateCustomField(cardField, projectId, cardNodeId) {
     return __awaiter(this, void 0, void 0, function* () {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             const fieldId = cardField.nodeId;
-            const value = parseFloat(cardField.valueToken.val);
+            const value = cardField.type == ProjectV2FieldDataType.NUMBER ? parseFloat(cardField.valueToken.val) : cardField.valueToken.val;
+            const valueDataType = cardField.type.toLowerCase();
+            const valueQueryType = cardField.type == ProjectV2FieldDataType.NUMBER ? "Float!" : "String!";
             yield octokit.graphql(`
-      mutation($projectId:ID!, $cardNodeId: ID!, $fieldId: ID!, $value: Float!) {
+      mutation($projectId:ID!, $cardNodeId: ID!, $fieldId: ID!, $value: ${valueQueryType}) {
         updateProjectV2ItemFieldValue(
           input: {
             projectId: $projectId
             itemId: $cardNodeId
             fieldId: $fieldId
             value: {
-              number: $value    
+              ${valueDataType}: $value
             }
           }
         ) {
@@ -216,28 +319,55 @@ function updateCustomField(cardField, projectId, cardNodeId) {
         }));
     });
 }
+// https://docs.github.com/ja/rest/issues/issues#update-an-issue
+function updateIssue(input) {
+    var _a, _b, _c;
+    return __awaiter(this, void 0, void 0, function* () {
+        const repositoryOwnerName = (_a = github.context.payload.repository) === null || _a === void 0 ? void 0 : _a.owner.login;
+        const issueRepository = (_b = github.context.payload.repository) === null || _b === void 0 ? void 0 : _b.name;
+        const issueNumber = (_c = github.context.payload.issue) === null || _c === void 0 ? void 0 : _c.number;
+        yield octokit.request(`PATCH /repos/${repositoryOwnerName}/${issueRepository}/issues/${issueNumber}`, {
+            milestone: input.milestoneNumber,
+            labels: input.labels
+        });
+    });
+}
 function main() {
+    var _a;
     return __awaiter(this, void 0, void 0, function* () {
         // step1: titleからfieldなどの情報をtokenizeする
         const tokens = tokenize(issueTitle);
-        if (tokens.length === 0) {
-            core.setFailed('更新する情報がありません');
-        }
         // step2: ProjectV2の情報を取得
-        const card = yield getProjectCardInfo(issueId, projectNumber);
+        const card = yield getProjectCardInfo(issueId, projectNumber, shouldSyncWithTrackedInIssue);
         const projectId = card.projectNodeId;
         const cardNodeId = card.item.nodeId;
-        // step3: 更新情報を生成
-        // NOTE: 現状fieldの更新しか実装してないので下記のような実装をしている。
-        const projectCardFields = yield createProjectCardFields(issueId, projectNumber, tokens);
-        // step4: 情報を更新
-        const tasks = projectCardFields.reduce((acc, f) => {
-            acc.push(updateCustomField(f, projectId, cardNodeId));
+        // step3: 情報を更新
+        // step3-1: fieldを更新
+        let fieldTokens = Array.from(tokens.fieldTokens);
+        // NOTE: shouldSyncWithTrackedInIssueがtrueの場合、更新するfieldを追加する
+        if (shouldSyncWithTrackedInIssue && (card === null || card === void 0 ? void 0 : card.trackedInIssue) !== undefined) {
+            fieldTokens.push({
+                fieldName: AppConstant.TRACKED_IN_ISSUE_TITLE_FILED_NAME,
+                val: `#${card.trackedInIssue.issueNumber} ${card.trackedInIssue.title}`
+            });
+        }
+        if (fieldTokens.length > 0) {
+            // NOTE: 現状fieldの更新しか実装してないので下記のような実装をしている。
+            const projectCardFields = yield createProjectCardFields(issueId, projectNumber, fieldTokens);
+            const tasks = projectCardFields.reduce((acc, f) => {
+                acc.push(updateCustomField(f, projectId, cardNodeId));
+                return acc;
+            }, []);
+            yield Promise.all(tasks);
+        }
+        // step3-2: issueを更新    
+        const labels = tokens.labelTokens.reduce((acc, v) => {
+            acc.push(v.labelName);
             return acc;
         }, []);
-        yield Promise.all(tasks)
-            .then((res) => {
-            console.log('done');
+        yield updateIssue({
+            milestoneNumber: (_a = card === null || card === void 0 ? void 0 : card.trackedInIssue) === null || _a === void 0 ? void 0 : _a.milestoneNumber,
+            labels: labels.length > 0 ? labels : undefined
         });
         // exit
         core.setOutput('cardNodeId', card.item.nodeId);
@@ -248,4 +378,6 @@ const octokit = github.getOctokit(ghToken);
 const issueId = core.getInput('issueId', { required: true });
 const projectNumber = parseInt(core.getInput('projectNumber', { required: true }));
 const issueTitle = core.getInput('issueTitle', { required: true });
+const shouldSyncWithTrackedInIssue = core.getInput('shouldSyncWithTrackedInIssue', { required: false }) === "true";
+const shouldAddProjectIfNeeded = core.getInput('shouldAddProjectIfNeeded', { required: false }) === "true";
 main();
