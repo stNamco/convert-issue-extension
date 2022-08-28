@@ -1,6 +1,8 @@
 # convert-issue-extension
 
-WIP
+if you want to do use convert-issue feature, you can input title only. so this action enable to update some data. which can be done by fetching some data using title and some node data.
+
+
 
 
 #### Example Usage
