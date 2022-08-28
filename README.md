@@ -5,6 +5,22 @@ if you want to do use convert-issue feature, you can input title only. so this a
 
 
 
+
+
+https://user-images.githubusercontent.com/11131753/187097269-fd847293-88f2-434c-91b5-9d19cde2e68b.mp4
+
+
+
+#### Features
+- add issue to project automatically.
+- sync data the issue and the tracked-in-issue.
+  - milesotne 
+- update project card field, if you write the title based on specified style.
+  - `($field-name:$field-value)example..` 
+- update issue labels, if you write the title based on specified style.
+  - `[label]example..` 
+
+
 #### Example Usage
 
 ```yaml
