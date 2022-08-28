@@ -15,8 +15,13 @@ https://user-images.githubusercontent.com/11131753/187097269-fd847293-88f2-434c-
 - add issue to project automatically.
 - sync data the issue and the tracked-in-issue.
   - milesotne 
+  - requirements
+    - you need to add text type field `tracked in issue title` to project.
 - update project card field, if you write the title based on specified style.
   - `($field-name:$field-value)example..` 
+  - requirements
+    - you need to add field `$field-name` to project.
+    ※ supported type are number and text currently.
 - update issue labels, if you write the title based on specified style.
   - `[label]example..` 
 
