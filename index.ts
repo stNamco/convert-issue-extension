@@ -83,6 +83,7 @@ interface ProjectV2CardInfo {
   projectNodeId: string;
   item: ProjectV2ItemEdge;
   trackedInIssue: TrackedInIssue | undefined;
+  labels: string[] | undefined;
 }
 
 interface TrackedInIssue {
@@ -139,21 +140,30 @@ async function addIssueToProject(projectNumber: number, contentId: string): Prom
 
 async function getProjectCardInfo(issueNodeId: string, projectNumber: number, shouldSyncWithTrackedInIssue: boolean): Promise<ProjectV2CardInfo | undefined> {
 
-  async function fetchCardInfo(issueNodeId: string, projectNumber: number, cursor?: string, withTrackedInIssue = false): Promise<{
+  let trackedInIssue: TrackedInIssue | undefined = undefined;
+  let labels: string[] | undefined = undefined;
+
+  async function fetchCardInfo(issueNodeId: string, projectNumber: number, cursor?: string, withTrackedInIssue = false, withLabel = false): Promise<{
     items: ProjectV2ItemEdge[],
     projectV2NodeId: string,
     itemPageLimit: number,
-    trackedInIssue: TrackedInIssue | undefined 
+    trackedInIssue: TrackedInIssue | undefined,
+    labels: string[] | undefined
   } | undefined> {
     // TODO: cardのデータどうとるのがいいかは今後検討。まずは動くものを作る。
     const res: any = await octokit.graphql(
       `
-      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $withTrackedInIssue: Boolean!, $cursor: String) {
+      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $withTrackedInIssue: Boolean!, $cursor: String, $withLabel: Boolean!) {
         node(id: $issueNodeId) {
         ... on Issue {
             id
             number
             title
+            labels(first: 10) @include(if: $withLabel) {
+              nodes {
+                name
+              }
+            }
             projectV2(number: $projectNumber) {
               id
               title
@@ -193,7 +203,8 @@ async function getProjectCardInfo(issueNodeId: string, projectNumber: number, sh
         issueNodeId,
         projectNumber,
         withTrackedInIssue,
-        cursor
+        cursor,
+        withLabel
       }
     );
 
@@ -212,7 +223,7 @@ async function getProjectCardInfo(issueNodeId: string, projectNumber: number, sh
       return acc;
     }, []);
 
-    let trackedInIssue: TrackedInIssue | undefined;
+    
     if (withTrackedInIssue && res?.node?.trackedInIssues?.edges.length > 0 && !trackedInIssue) {
       // NOTE: 一旦TrackedInIssuesは1つとして実装する。
       const edge = res?.node?.trackedInIssues?.edges[0];
@@ -223,15 +234,24 @@ async function getProjectCardInfo(issueNodeId: string, projectNumber: number, sh
       };
     }
 
+    
+    if (withTrackedInIssue && res?.node?.labels?.nodes.length > 0 && !labels) {
+      labels = res!.node!.labels!.nodes.reduce((acc: string[], v: any): string[] => {
+        acc.push(v.name);
+        return acc;
+      }, []);
+    }
+
     return {
       items: projectV2ItemEdges,
       projectV2NodeId: res.node.projectV2.id,
       itemPageLimit: Math.ceil(res.node.projectV2.items.totalCount / 100),
-      trackedInIssue: trackedInIssue
+      trackedInIssue: trackedInIssue,
+      labels: labels
     }
   }
 
-  let info = await fetchCardInfo(issueNodeId, projectNumber, undefined, shouldSyncWithTrackedInIssue);
+  let info = await fetchCardInfo(issueNodeId, projectNumber, undefined, shouldSyncWithTrackedInIssue, true);
   let projectV2NodeId: string;
 
   if (info === undefined) {
@@ -262,7 +282,8 @@ async function getProjectCardInfo(issueNodeId: string, projectNumber: number, sh
   const card: ProjectV2CardInfo = {
     projectNodeId: projectV2NodeId!,
     item: item!,
-    trackedInIssue: info!.trackedInIssue
+    trackedInIssue: info!.trackedInIssue,
+    labels: info!.labels
   };
 
   return card;
@@ -407,10 +428,12 @@ async function main() {
   }
 
   // step3-2: issueを更新    
-  const labels = tokens.labelTokens.reduce((acc: string[], v: GithubLabelValueToken) => {
+  const tokenLabels = tokens.labelTokens.reduce((acc: string[], v: GithubLabelValueToken) => {
     acc.push(v.labelName);
     return acc;
   }, []);
+  const labelSet = new Set(tokenLabels.concat(card!.labels ?? []));
+  const labels = [...labelSet];
   await updateIssue({
     milestoneNumber:  card?.trackedInIssue?.milestoneNumber,
     labels: labels.length > 0 ? labels: undefined
