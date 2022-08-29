@@ -123,17 +123,24 @@ function addIssueToProject(projectNumber, contentId) {
 function getProjectCardInfo(issueNodeId, projectNumber, shouldSyncWithTrackedInIssue) {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
-        function fetchCardInfo(issueNodeId, projectNumber, cursor, withTrackedInIssue = false) {
-            var _a, _b, _c, _d;
+        let trackedInIssue = undefined;
+        let labels = undefined;
+        function fetchCardInfo(issueNodeId, projectNumber, cursor, withTrackedInIssue = false, withLabel = false) {
+            var _a, _b, _c, _d, _e, _f;
             return __awaiter(this, void 0, void 0, function* () {
                 // TODO: cardのデータどうとるのがいいかは今後検討。まずは動くものを作る。
                 const res = yield octokit.graphql(`
-      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $withTrackedInIssue: Boolean!, $cursor: String) {
+      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $withTrackedInIssue: Boolean!, $cursor: String, $withLabel: Boolean!) {
         node(id: $issueNodeId) {
         ... on Issue {
             id
             number
             title
+            labels(first: 10) @include(if: $withLabel) {
+              nodes {
+                name
+              }
+            }
             projectV2(number: $projectNumber) {
               id
               title
@@ -172,7 +179,8 @@ function getProjectCardInfo(issueNodeId, projectNumber, shouldSyncWithTrackedInI
                     issueNodeId,
                     projectNumber,
                     withTrackedInIssue,
-                    cursor
+                    cursor,
+                    withLabel
                 });
                 if (!res.node.projectV2) {
                     return undefined;
@@ -187,7 +195,6 @@ function getProjectCardInfo(issueNodeId, projectNumber, shouldSyncWithTrackedInI
                     });
                     return acc;
                 }, []);
-                let trackedInIssue;
                 if (withTrackedInIssue && ((_b = (_a = res === null || res === void 0 ? void 0 : res.node) === null || _a === void 0 ? void 0 : _a.trackedInIssues) === null || _b === void 0 ? void 0 : _b.edges.length) > 0 && !trackedInIssue) {
                     // NOTE: 一旦TrackedInIssuesは1つとして実装する。
                     const edge = (_d = (_c = res === null || res === void 0 ? void 0 : res.node) === null || _c === void 0 ? void 0 : _c.trackedInIssues) === null || _d === void 0 ? void 0 : _d.edges[0];
@@ -197,15 +204,22 @@ function getProjectCardInfo(issueNodeId, projectNumber, shouldSyncWithTrackedInI
                         milestoneNumber: edge.node.milestone ? edge.node.milestone.number : undefined,
                     };
                 }
+                if (withTrackedInIssue && ((_f = (_e = res === null || res === void 0 ? void 0 : res.node) === null || _e === void 0 ? void 0 : _e.labels) === null || _f === void 0 ? void 0 : _f.nodes.length) > 0 && !labels) {
+                    labels = res.node.labels.nodes.reduce((acc, v) => {
+                        acc.push(v.name);
+                        return acc;
+                    }, []);
+                }
                 return {
                     items: projectV2ItemEdges,
                     projectV2NodeId: res.node.projectV2.id,
                     itemPageLimit: Math.ceil(res.node.projectV2.items.totalCount / 100),
-                    trackedInIssue: trackedInIssue
+                    trackedInIssue: trackedInIssue,
+                    labels: labels
                 };
             });
         }
-        let info = yield fetchCardInfo(issueNodeId, projectNumber, undefined, shouldSyncWithTrackedInIssue);
+        let info = yield fetchCardInfo(issueNodeId, projectNumber, undefined, shouldSyncWithTrackedInIssue, true);
         let projectV2NodeId;
         if (info === undefined) {
             if (shouldAddProjectIfNeeded) {
@@ -233,7 +247,8 @@ function getProjectCardInfo(issueNodeId, projectNumber, shouldSyncWithTrackedInI
         const card = {
             projectNodeId: projectV2NodeId,
             item: item,
-            trackedInIssue: info.trackedInIssue
+            trackedInIssue: info.trackedInIssue,
+            labels: info.labels
         };
         return card;
     });
@@ -340,7 +355,7 @@ function updateIssue(input) {
     });
 }
 function main() {
-    var _a;
+    var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         // step1: titleからfieldなどの情報をtokenizeする
         const tokens = tokenize(issueTitle);
@@ -368,12 +383,14 @@ function main() {
             yield Promise.all(tasks);
         }
         // step3-2: issueを更新    
-        const labels = tokens.labelTokens.reduce((acc, v) => {
+        const tokenLabels = tokens.labelTokens.reduce((acc, v) => {
             acc.push(v.labelName);
             return acc;
         }, []);
+        const labelSet = new Set(tokenLabels.concat((_a = card.labels) !== null && _a !== void 0 ? _a : []));
+        const labels = [...labelSet];
         yield updateIssue({
-            milestoneNumber: (_a = card === null || card === void 0 ? void 0 : card.trackedInIssue) === null || _a === void 0 ? void 0 : _a.milestoneNumber,
+            milestoneNumber: (_b = card === null || card === void 0 ? void 0 : card.trackedInIssue) === null || _b === void 0 ? void 0 : _b.milestoneNumber,
             labels: labels.length > 0 ? labels : undefined
         });
         // exit
