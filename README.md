@@ -54,11 +54,11 @@ jobs:
 
 ### Action inputs
 
-| Name | Description |
+| Name | Description | 
 | --- | --- |
 | githubToken | `repo` and `project` scoped [Personal Access Token (PAT)](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token). |
 | issueId | issue node id. |
 | issueTitle | issue title. if you want to do use convert-issue feature, you can input title only. so this action use the value. |
 | projectNumber | github project numeber. | 
-| shouldSyncWithTrackedInIssue | `true` or `false`. default `false` |
-| shouldAddProjectIfNeeded | `true` or `false`. default `true` |
+| (optional)shouldSyncWithTrackedInIssue | `true` or `false`. default `false` |
+| (optional)shouldAddProjectIfNeeded | `true` or `false`. default `true` |
