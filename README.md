@@ -13,7 +13,7 @@ https://user-images.githubusercontent.com/11131753/187097269-fd847293-88f2-434c-
 
 #### Features
 - add issue to project automatically.
-- sync data the issue and the tracked-in-issue.
+- sync data between the issue and the tracked-in-issue.
   - milesotne 
   - requirements
     - you need to add text type field `tracked in issue title` to project.
