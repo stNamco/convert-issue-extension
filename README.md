@@ -1,6 +1,6 @@
 # convert-issue-extension
 
-if you want to use convert-issue feature, you can input title only. this action enable to update some data. which can be done by fetching some data using title and some node data.
+if you want to use convert-issue feature, you can input title only. this action enable to update some data not only title. which can be done by fetching some data using title and some node data.
 
 
 
