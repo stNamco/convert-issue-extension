@@ -151,62 +151,67 @@ async function getProjectCardInfo(issueNodeId: string, projectNumber: number, sh
     labels: string[] | undefined
   } | undefined> {
     // TODO: cardのデータどうとるのがいいかは今後検討。まずは動くものを作る。
-    const res: any = await octokit.graphql(
-      `
-      query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $withTrackedInIssue: Boolean!, $cursor: String, $withLabel: Boolean!) {
-        node(id: $issueNodeId) {
-        ... on Issue {
-            id
-            number
-            title
-            labels(first: 10) @include(if: $withLabel) {
-              nodes {
-                name
-              }
-            }
-            projectV2(number: $projectNumber) {
+    let res: any = undefined;
+    try {
+      res = await octokit.graphql(
+        `
+        query getCardInfo($issueNodeId: ID!, $projectNumber: Int!, $withTrackedInIssue: Boolean!, $cursor: String, $withLabel: Boolean!) {
+          node(id: $issueNodeId) {
+          ... on Issue {
               id
+              number
               title
-              items(first: 100, after: $cursor) {
-                totalCount
-                edges {
-                  cursor
-                  node {
-                    id
-                    content {
-                      ... on Issue {
-                        id
-                        title
+              labels(first: 10) @include(if: $withLabel) {
+                nodes {
+                  name
+                }
+              }
+              projectV2(number: $projectNumber) {
+                id
+                title
+                items(first: 100, after: $cursor) {
+                  totalCount
+                  edges {
+                    cursor
+                    node {
+                      id
+                      content {
+                        ... on Issue {
+                          id
+                          title
+                        }
                       }
                     }
                   }
                 }
               }
-            }
-            trackedInIssues(first: 10) @include(if: $withTrackedInIssue) {
-              edges {
-                node {
-                  title
-                  number
-                  milestone {
-                    id
+              trackedInIssues(first: 10) @include(if: $withTrackedInIssue) {
+                edges {
+                  node {
+                    title
                     number
+                    milestone {
+                      id
+                      number
+                    }
                   }
                 }
               }
             }
           }
         }
-      }
-      `,
-      {
-        issueNodeId,
-        projectNumber,
-        withTrackedInIssue,
-        cursor,
-        withLabel
-      }
-    );
+        `,
+        {
+          issueNodeId,
+          projectNumber,
+          withTrackedInIssue,
+          cursor,
+          withLabel
+        }
+      );
+    } catch (e) {
+      return undefined;
+    }
 
     if (!res.node.projectV2) {
       return undefined;
